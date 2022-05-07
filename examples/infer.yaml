@@ -1,0 +1,26 @@
+# training options
+context_size: 7
+encoder_units: 2048
+epochs: 90-100
+estimate_spk_qty: 2
+estimate_spk_qty_thr: -1
+feature_dim: 23
+frame_shift: 80
+frame_size: 200
+gpu: 0
+hidden_size: 256
+infer_data_dir: <Kaldi data directory for evaluation set>
+input_transform: logmel_meannorm
+median_window_length: 11
+model_type: TransformerEDA
+models_path: <Path of models to evaluate>
+num_frames: -1
+rttms_dir: <Output directory for RTTMs>
+sampling_rate: 8000
+seed: 3
+subsampling: 10
+time_shuffle: True
+threshold: 0.5
+transformer_encoder_dropout: 0.1
+transformer_encoder_n_heads: 4
+transformer_encoder_n_layers: 4

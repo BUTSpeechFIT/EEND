@@ -1,0 +1,35 @@
+# training options
+attractor_loss_ratio: 1.0
+attractor_encoder_dropout: 0.1
+attractor_decoder_dropout: 0.1
+context_size: 7
+detach_attractor_loss: False
+dev_batchsize: 128
+encoder_units: 2048
+feature_dim: 23
+frame_shift: 80
+frame_size: 200
+use_last_samples: True
+gpu: 1
+gradclip: 5
+hidden_size: 256
+input_transform: logmel_meannorm
+log_report_batches_num: 1000
+max_epochs: 100
+model_type: TransformerEDA
+noam_warmup_steps: 200000
+num_frames: 500
+num_speakers: 2
+num_workers: 4
+optimizer: noam
+output_path: <Output directory>
+sampling_rate: 8000
+seed: 3
+subsampling: 10
+time_shuffle: True
+train_batchsize: 32
+transformer_encoder_dropout: 0.1
+transformer_encoder_n_heads: 4
+transformer_encoder_n_layers: 4
+train_data_dir: <Kaldi data directory for train set>
+valid_data_dir: <Kaldi data directory for validation set>

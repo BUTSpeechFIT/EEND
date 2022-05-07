@@ -1,0 +1,9 @@
+librosa==0.8.0
+logging==0.5.1.2
+numpy==1.19.5
+safe_gpu
+scipy==1.5.3
+soundfile==0.10.3.post1
+tensorboard
+torch==1.10.0
+yamlargparse==1.31.1
