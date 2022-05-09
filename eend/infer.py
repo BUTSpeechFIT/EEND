@@ -4,7 +4,6 @@
 # Copyright 2022 Brno University of Technology (author: Federico Landini)
 # Licensed under the MIT license.
 
-
 from backend.models import (
     average_checkpoints,
     get_model,
@@ -120,7 +119,8 @@ def hard_labels_to_rttm(
 
 def _init_fn(worker_id):
     worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(int(worker_seed))
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 def postprocess_output(
