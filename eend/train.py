@@ -31,6 +31,8 @@ import torch
 import logging
 import yamlargparse
 
+import torch
+torch.set_num_threads(8)
 
 def _init_fn(worker_id):
     worker_seed = torch.initial_seed() % 2**32
