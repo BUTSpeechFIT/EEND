@@ -28,6 +28,7 @@ import numpy as np
 import os
 import random
 import torch
+import torch.distributed as dist
 import logging
 import yamlargparse
 
@@ -86,7 +87,7 @@ def compute_loss_and_metrics(
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     n_speakers = np.asarray([t.shape[1] for t in labels])
     y_pred, attractor_loss = model(input, labels, args)
-    loss, standard_loss = model.get_loss(
+    loss, standard_loss = model.module.get_loss(
         y_pred, labels, n_speakers, attractor_loss)
     metrics = calculate_metrics(
         labels.detach(), y_pred.detach(), threshold=0.5)
@@ -173,7 +174,7 @@ def parse_arguments() -> SimpleNamespace:
     parser.add_argument('--feature-dim', type=int)
     parser.add_argument('--frame-shift', type=int)
     parser.add_argument('--frame-size', type=int)
-    parser.add_argument('--gpu', '-g', default=-1, type=int,
+    parser.add_argument('--gpu', '-g', default='-1', type=str,
                         help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--gradclip', default=-1, type=int,
                         help='gradient clipping. if < 0, no clipping')
@@ -259,13 +260,23 @@ if __name__ == '__main__':
 
     train_loader, dev_loader = get_training_dataloaders(args)
 
-    if args.gpu >= 1:
-        gpuid = use_single_gpu(args.gpu)
-        logging.info('GPU device {} is used'.format(gpuid))
-        args.device = torch.device("cuda")
-    else:
-        gpuid = -1
-        args.device = torch.device("cpu")
+    # gpus initialization inspired by wenet
+    rank = int(os.environ['LOCAL_RANK'])
+    world_size = int(os.environ['WORLD_SIZE'])
+    print(rank, world_size, args.gpu)
+    gpu = int(args.gpu.split(',')[rank])
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu)
+    dist.init_process_group(backend='nccl')
+    args.device = torch.device("cuda")
+
+    # orig gpu init
+    # if args.gpu >= 1:
+    #    gpuid = use_single_gpu(args.gpu)
+    #    logging.info('GPU device {} is used'.format(gpuid))
+    #    args.device = torch.device("cuda")
+    #else:
+    #    gpuid = -1
+    #    args.device = torch.device("cpu")
 
     if args.init_model_path == '':
         model = get_model(args)
@@ -275,6 +286,7 @@ if __name__ == '__main__':
         model = average_checkpoints(
             args.device, model, args.init_model_path, args.init_epochs)
         optimizer = setup_optimizer(args, model)
+
 
     train_batches_qty = len(train_loader)
     dev_batches_qty = len(dev_loader)
@@ -298,48 +310,55 @@ if __name__ == '__main__':
         # Save initial model
         save_checkpoint(args, init_epoch, model, optimizer, 0)
 
-    for epoch in range(init_epoch, args.max_epochs):
-        model.train()
-        for i, batch in enumerate(train_loader):
-            features = batch['xs']
-            labels = batch['ts']
-            features, labels = pad_sequence(features, labels, args.num_frames)
-            features = torch.stack(features).to(args.device)
-            labels = torch.stack(labels).to(args.device)
-            loss, acum_train_metrics = compute_loss_and_metrics(
-                model, labels, features, acum_train_metrics)
-            if i % args.log_report_batches_num == \
-                    (args.log_report_batches_num-1):
-                for k in acum_train_metrics.keys():
-                    writer.add_scalar(
-                        f"train_{k}",
-                        acum_train_metrics[k] / args.log_report_batches_num,
-                        epoch * train_batches_qty + i)
-                writer.add_scalar(
-                    "lrate",
-                    get_rate(optimizer),
-                    epoch * train_batches_qty + i)
-                acum_train_metrics = reset_metrics(acum_train_metrics)
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradclip)
-            optimizer.step()
+    model.cuda()
+    ddp_model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
+    device = torch.device("cuda")
 
-        save_checkpoint(args, epoch+1, model, optimizer, loss)
+    model_context = ddp_model.join
 
-        with torch.no_grad():
-            model.eval()
-            for i, batch in enumerate(dev_loader):
+    with torch.set_grad_enabled(True), model_context():
+        for epoch in range(init_epoch, args.max_epochs):
+            ddp_model.train()
+            for i, batch in enumerate(train_loader):
                 features = batch['xs']
                 labels = batch['ts']
-                features, labels = pad_sequence(
-                    features, labels, args.num_frames)
+                features, labels = pad_sequence(features, labels, args.num_frames)
                 features = torch.stack(features).to(args.device)
                 labels = torch.stack(labels).to(args.device)
-                _, acum_dev_metrics = compute_loss_and_metrics(
-                    model, labels, features, acum_dev_metrics)
-        for k in acum_dev_metrics.keys():
-            writer.add_scalar(
-                f"dev_{k}", acum_dev_metrics[k] / dev_batches_qty,
-                epoch * dev_batches_qty + i)
-        acum_dev_metrics = reset_metrics(acum_dev_metrics)
+                loss, acum_train_metrics = compute_loss_and_metrics(
+                    ddp_model, labels, features, acum_train_metrics)
+                if i % args.log_report_batches_num == \
+                        (args.log_report_batches_num-1):
+                    for k in acum_train_metrics.keys():
+                        writer.add_scalar(
+                            f"train_{k}",
+                            acum_train_metrics[k] / args.log_report_batches_num,
+                            epoch * train_batches_qty + i)
+                    writer.add_scalar(
+                        "lrate",
+                        get_rate(optimizer),
+                        epoch * train_batches_qty + i)
+                    acum_train_metrics = reset_metrics(acum_train_metrics)
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(ddp_model.parameters(), args.gradclip)
+                optimizer.step()
+
+            save_checkpoint(args, epoch+1, ddp_model, optimizer, loss)
+
+            with torch.no_grad():
+                ddp_model.eval()
+                for i, batch in enumerate(dev_loader):
+                    features = batch['xs']
+                    labels = batch['ts']
+                    features, labels = pad_sequence(
+                        features, labels, args.num_frames)
+                    features = torch.stack(features).to(args.device)
+                    labels = torch.stack(labels).to(args.device)
+                    _, acum_dev_metrics = compute_loss_and_metrics(
+                        ddp_model, labels, features, acum_dev_metrics)
+            for k in acum_dev_metrics.keys():
+                writer.add_scalar(
+                    f"dev_{k}", acum_dev_metrics[k] / dev_batches_qty,
+                    epoch * dev_batches_qty + i)
+            acum_dev_metrics = reset_metrics(acum_dev_metrics)
