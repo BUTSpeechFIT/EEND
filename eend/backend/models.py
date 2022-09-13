@@ -393,7 +393,7 @@ def pad_labels(ts: torch.Tensor, out_size: int) -> torch.Tensor:
         if t.shape[1] < out_size:
             # padding
             ts_padded.append(torch.cat((
-                t, torch.zeros((t.shape[0], out_size - t.shape[1]))), dim=1))
+                t, -torch.ones((t.shape[0], out_size - t.shape[1]))), dim=1))
         elif t.shape[1] > out_size:
             # truncate
             logging.warn(f"Skipping {t} with expected maximum {out_size}")
