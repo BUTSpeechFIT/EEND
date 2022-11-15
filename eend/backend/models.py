@@ -7,8 +7,9 @@
 from os.path import isfile, join
 
 from backend.losses import (
-    batch_pit_n_speaker_loss,
     standard_loss,
+    pit_loss_multispk,
+    vad_loss,
 )
 from backend.updater import (
     NoamOpt,
@@ -111,7 +112,6 @@ class EncoderDecoderAttractor(Module):
         """
 
         max_n_speakers = max(n_speakers)
-        # assumes all sequences have the same amount of speakers
         if self.device == torch.device("cpu"):
             zeros = torch.zeros(
                 (xs.shape[0], max_n_speakers + 1, self.n_units))
@@ -270,6 +270,7 @@ class TransformerEDADiarization(Module):
         n_heads: int,
         n_layers: int,
         dropout: float,
+        vad_loss_weight: float,
         attractor_loss_ratio: float,
         attractor_encoder_dropout: float,
         attractor_decoder_dropout: float,
@@ -282,6 +283,7 @@ class TransformerEDADiarization(Module):
           n_heads (int): Number of attention heads
           n_layers (int): Number of transformer-encoder layers
           dropout (float): dropout ratio
+          vad_loss_weight (float) : weight for vad_loss
           attractor_loss_ratio (float)
           attractor_encoder_dropout (float)
           attractor_decoder_dropout (float)
@@ -299,6 +301,7 @@ class TransformerEDADiarization(Module):
             detach_attractor_loss,
         )
         self.attractor_loss_ratio = attractor_loss_ratio
+        self.vad_loss_weight = vad_loss_weight
 
     def get_embeddings(self, xs: torch.Tensor) -> torch.Tensor:
         ilens = [x.shape[0] for x in xs]
@@ -333,7 +336,8 @@ class TransformerEDADiarization(Module):
         ys = [torch.sigmoid(y) for y in ys]
         for p, y in zip(probs, ys):
             if args.estimate_spk_qty != -1:
-                ys_active.append(y[:, :args.estimate_spk_qty])
+                sorted_p, order = torch.sort(p, descending=True)
+                ys_active.append(y[:, order[:args.estimate_spk_qty]])
             elif args.estimate_spk_qty_thr != -1:
                 silence = np.where(
                     p.data.to("cpu") < args.estimate_spk_qty_thr)[0]
@@ -348,9 +352,9 @@ class TransformerEDADiarization(Module):
         self,
         xs: torch.Tensor,
         ts: torch.Tensor,
+        n_speakers: List[int],
         args: SimpleNamespace
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        n_speakers = [t.shape[1] for t in ts]
         emb = self.get_embeddings(xs)
 
         if args.time_shuffle:
@@ -372,18 +376,22 @@ class TransformerEDADiarization(Module):
         ys: torch.Tensor,
         target: torch.Tensor,
         n_speakers: List[int],
-        attractor_loss: torch.Tensor
+        attractor_loss: torch.Tensor,
+        vad_loss_weight: float,
+        detach_attractor_loss: bool
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ts_padded = target
         max_n_speakers = max(n_speakers)
         ts_padded = pad_labels(target, max_n_speakers)
+        ts_padded = torch.stack(ts_padded)
         ys_padded = pad_labels(ys, max_n_speakers)
+        ys_padded = torch.stack(ys_padded)
 
-        loss, labels = batch_pit_n_speaker_loss(
-            self.device, ys_padded, ts_padded, n_speakers)
-        loss = standard_loss(ys_padded, labels.float())
+        loss = pit_loss_multispk(
+            ys_padded, ts_padded, n_speakers, detach_attractor_loss)
+        vad_loss_value = vad_loss(ys, target)
 
-        return loss + attractor_loss * self.attractor_loss_ratio, loss
+        return loss + vad_loss_value * vad_loss_weight + \
+            attractor_loss * self.attractor_loss_ratio, loss
 
 
 def pad_labels(ts: torch.Tensor, out_size: int) -> torch.Tensor:
@@ -392,15 +400,44 @@ def pad_labels(ts: torch.Tensor, out_size: int) -> torch.Tensor:
     for _, t in enumerate(ts):
         if t.shape[1] < out_size:
             # padding
-            ts_padded.append(torch.cat((
-                t, -torch.ones((t.shape[0], out_size - t.shape[1]))), dim=1))
+            ts_padded.append(torch.cat((t, -1 * torch.ones((
+                t.shape[0], out_size - t.shape[1]))), dim=1))
         elif t.shape[1] > out_size:
             # truncate
-            logging.warn(f"Skipping {t} with expected maximum {out_size}")
-            # raise ValueError
+            ts_padded.append(t[:, :out_size].float())
         else:
-            ts_padded.append(t)
-    return torch.stack(ts_padded)
+            ts_padded.append(t.float())
+    return ts_padded
+
+
+def pad_sequence(
+    features: List[torch.Tensor],
+    labels: List[torch.Tensor],
+    seq_len: int
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    features_padded = []
+    labels_padded = []
+    assert len(features) == len(labels), (
+        f"Features and labels in batch were expected to match but got "
+        "{len(features)} features and {len(labels)} labels.")
+    for i, _ in enumerate(features):
+        assert features[i].shape[0] == labels[i].shape[0], (
+            f"Length of features and labels were expected to match but got "
+            "{features[i].shape[0]} and {labels[i].shape[0]}")
+        length = features[i].shape[0]
+        if length < seq_len:
+            extend = seq_len - length
+            features_padded.append(torch.cat((features[i], -torch.ones((
+                extend, features[i].shape[1]))), dim=0))
+            labels_padded.append(torch.cat((labels[i], -torch.ones((
+                extend, labels[i].shape[1]))), dim=0))
+        elif length > seq_len:
+            raise (f"Sequence of length {length} was received but only "
+                   "{seq_len} was expected.")
+        else:
+            features_padded.append(features[i])
+            labels_padded.append(labels[i])
+    return features_padded, labels_padded
 
 
 def save_checkpoint(
@@ -453,9 +490,10 @@ def get_model(args: SimpleNamespace) -> Module:
             attractor_encoder_dropout=args.attractor_encoder_dropout,
             attractor_decoder_dropout=args.attractor_decoder_dropout,
             detach_attractor_loss=args.detach_attractor_loss,
+            vad_loss_weight=args.vad_loss_weight,
         )
     else:
-        raise ValueError('Possible model_type are "TransformerEDA"')
+        raise ValueError('Possible model_type is "TransformerEDA"')
     return model
 
 

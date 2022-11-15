@@ -179,6 +179,7 @@ def parse_arguments() -> SimpleNamespace:
     parser.add_argument('--transformer-encoder-n-heads', type=int)
     parser.add_argument('--transformer-encoder-n-layers', type=int)
     parser.add_argument('--transformer-encoder-dropout', type=float)
+    parser.add_argument('--vad-loss-weight', default=0.0, type=float)
 
     attractor_args = parser.add_argument_group('attractor')
     attractor_args.add_argument(

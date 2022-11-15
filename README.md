@@ -31,7 +31,15 @@ Federico Landini, Alicia Lozano-Diez, Mireia Diez, Lukáš Burget: [From Simulat
 }
 ```
 
-
+Federico Landini, Mireia Diez, Alicia Lozano-Diez, Lukáš Burget: [Multi-Speaker and Wide-Band Simulated Conversations as Training Data for End-to-End Neural Diarization](https://arxiv.org/abs/2211.06750)
+```
+@article{landini2022multispeaker,
+  title={Multi-Speaker and Wide-Band Simulated Conversations as Training Data for End-to-End Neural Diarization},
+  author={Landini, Federico and Diez, Mireia and Lozano-Diez, Alicia and Burget, Luk{\'a}{\v{s}}},
+  journal={arXiv preprint arXiv:2211.06750},
+  year={2022}
+}
+```
 
 
 ## Contact

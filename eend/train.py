@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright 2019 Hitachi, Ltd. (author: Yusuke Fujita)
-# Copyright 2022 Brno University of Technology (author: Federico Landini)
+# Copyright 2022 Brno University of Technology (authors: Federico Landini)
 # Licensed under the MIT license.
 
 
@@ -9,6 +9,8 @@ from backend.models import (
     average_checkpoints,
     get_model,
     load_checkpoint,
+    pad_labels,
+    pad_sequence,
     save_checkpoint,
 )
 from backend.updater import setup_optimizer, get_rate
@@ -38,36 +40,6 @@ def _init_fn(worker_id):
     random.seed(worker_seed)
 
 
-def pad_sequence(
-    features: List[torch.Tensor],
-    labels: List[torch.Tensor],
-    seq_len: int
-) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-    features_padded = []
-    labels_padded = []
-    assert len(features) == len(labels), (
-        f"Features and labels in batch were expected to match but got "
-        "{len(features)} features and {len(labels)} labels.")
-    for i, _ in enumerate(features):
-        assert features[i].shape[0] == labels[i].shape[0], (
-            f"Length of features and labels were expected to match but got "
-            "{features[i].shape[0]} and {labels[i].shape[0]}")
-        length = features[i].shape[0]
-        if length < seq_len:
-            extend = seq_len - length
-            features_padded.append(torch.cat((features[i], -torch.ones((
-                extend, features[i].shape[1]))), dim=0))
-            labels_padded.append(torch.cat((labels[i], -torch.ones((
-                extend, labels[i].shape[1]))), dim=0))
-        elif length > seq_len:
-            raise (f"Sequence of length {length} was received but only "
-                   "{seq_len} was expected.")
-        else:
-            features_padded.append(features[i])
-            labels_padded.append(labels[i])
-    return features_padded, labels_padded
-
-
 def _convert(
     batch: List[Tuple[torch.Tensor, torch.Tensor, str]]
 ) -> Dict[str, Any]:
@@ -80,18 +52,21 @@ def compute_loss_and_metrics(
     model: torch.nn.Module,
     labels: torch.Tensor,
     input: torch.Tensor,
-    acum_metrics: Dict[str, float]
+    n_speakers: List[int],
+    acum_metrics: Dict[str, float],
+    vad_loss_weight: float,
+    detach_attractor_loss: bool
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    n_speakers = np.asarray([t.shape[1] for t in labels])
-    y_pred, attractor_loss = model(input, labels, args)
+    y_pred, attractor_loss = model(input, labels, n_speakers, args)
     loss, standard_loss = model.get_loss(
-        y_pred, labels, n_speakers, attractor_loss)
+        y_pred, labels, n_speakers, attractor_loss, vad_loss_weight,
+        detach_attractor_loss)
     metrics = calculate_metrics(
         labels.detach(), y_pred.detach(), threshold=0.5)
     acum_metrics = update_metrics(acum_metrics, metrics)
-    acum_metrics['loss'] += loss.detach()
-    acum_metrics['loss_standard'] += standard_loss.detach()
-    acum_metrics['loss_attractor'] += attractor_loss.detach()
+    acum_metrics['loss'] += loss.item()
+    acum_metrics['loss_standard'] += standard_loss.item()
+    acum_metrics['loss_attractor'] += attractor_loss.item()
     return loss, acum_metrics
 
 
@@ -215,6 +190,7 @@ def parse_arguments() -> SimpleNamespace:
     parser.add_argument('--transformer-encoder-n-heads', type=int)
     parser.add_argument('--transformer-encoder-n-layers', type=int)
     parser.add_argument('--use-last-samples', default=True, type=bool)
+    parser.add_argument('--vad-loss-weight', default=0.0, type=float)
     parser.add_argument('--valid-data-dir',
                         help='kaldi-style data dir used for validation.')
 
@@ -287,10 +263,11 @@ if __name__ == '__main__':
         # Load latest model and continue from there
         directory = os.path.join(args.output_path, 'models')
         checkpoints = os.listdir(directory)
-        paths = [os.path.join(directory, basename) for basename in checkpoints]
+        paths = [os.path.join(directory, basename) for
+                 basename in checkpoints if basename.startswith("checkpoint_")]
         latest = max(paths, key=os.path.getctime)
         epoch, model, optimizer, _ = load_checkpoint(args, latest)
-        init_epoch = epoch + 1
+        init_epoch = epoch
     else:
         init_epoch = 0
         # Save initial model
@@ -301,11 +278,17 @@ if __name__ == '__main__':
         for i, batch in enumerate(train_loader):
             features = batch['xs']
             labels = batch['ts']
+            n_speakers = np.asarray([max(torch.where(t.sum(0) != 0)[0]) + 1
+                                     if t.sum() > 0 else 0 for t in labels])
+            max_n_speakers = max(n_speakers)
             features, labels = pad_sequence(features, labels, args.num_frames)
+            labels = pad_labels(labels, max_n_speakers)
             features = torch.stack(features).to(args.device)
             labels = torch.stack(labels).to(args.device)
             loss, acum_train_metrics = compute_loss_and_metrics(
-                model, labels, features, acum_train_metrics)
+                model, labels, features, n_speakers, acum_train_metrics,
+                args.vad_loss_weight,
+                args.detach_attractor_loss)
             if i % args.log_report_batches_num == \
                     (args.log_report_batches_num-1):
                 for k in acum_train_metrics.keys():
@@ -330,12 +313,18 @@ if __name__ == '__main__':
             for i, batch in enumerate(dev_loader):
                 features = batch['xs']
                 labels = batch['ts']
+                n_speakers = np.asarray([max(torch.where(t.sum(0) != 0)[0]) + 1
+                                        if t.sum() > 0 else 0 for t in labels])
+                max_n_speakers = max(n_speakers)
                 features, labels = pad_sequence(
                     features, labels, args.num_frames)
+                labels = pad_labels(labels, max_n_speakers)
                 features = torch.stack(features).to(args.device)
                 labels = torch.stack(labels).to(args.device)
                 _, acum_dev_metrics = compute_loss_and_metrics(
-                    model, labels, features, acum_dev_metrics)
+                    model, labels, features, n_speakers, acum_dev_metrics,
+                    args.vad_loss_weight,
+                    args.detach_attractor_loss)
         for k in acum_dev_metrics.keys():
             writer.add_scalar(
                 f"dev_{k}", acum_dev_metrics[k] / dev_batches_qty,

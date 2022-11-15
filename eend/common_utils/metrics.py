@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright 2022 Brno University of Technology (author: Federico Landini)
+# Copyright 2022 Brno University of Technology (author: Federico Landini, Mireia Diez)
 # Licensed under the MIT license.
 
 from typing import Dict
@@ -24,9 +24,13 @@ def calculate_metrics(
     res["VAD_miss"] = 0
     res["OSD_FA"] = 0
     res["OSD_miss"] = 0
-    # Each sequence is processed separately as shorter sequences might need
-    # masking. Each sequence counts for the errors independently and the mean
-    # for the batch is returned.
+    # Each error is accumulated per sequence as they might need
+    # different masking. Each sequence counts for the errors independently
+    # and the total speech/overlap counts are acumulated.
+    # Final values are estimated for the batch and returned.
+    active_frames_tot = 0
+    speech_frames_tot = 0
+    overlap_frames_tot = 0
     for seq_num in range(target.shape[0]):
         t_seq = target[seq_num, :, :]
         mask = (t_seq != -1)
@@ -42,48 +46,36 @@ def calculate_metrics(
         res["avg_pred_spk_qty"] += torch.mean(pred_spk_qty.double())
         # active_frames has frames where at least one speaker is active
         active_frames = torch.where(ref_spk_qty != 0)[0]
+        active_frames_tot += active_frames.shape[0]
         # speech_frames has #frames with speech (if n active speakers, n times)
         speech_frames = ref_spk_qty[active_frames].sum()
+        speech_frames_tot += speech_frames
         # overlap_frames has frames where at least two speakers are active
         overlap_frames = torch.where(ref_spk_qty > 1)[0]
+        overlap_frames_tot += overlap_frames.shape[0]
 
         diff_qty = pred_spk_qty - ref_spk_qty
-        res["DER_FA"] += torch.round(
-            100.0 * diff_qty[torch.where(diff_qty > 0)].sum() /
-            (epsilon + speech_frames) * 10**round_digits
-            ) / (10**round_digits)
-        res["DER_miss"] += torch.round(
-            -100.0 * diff_qty[torch.where(diff_qty < 0)].sum() /
-            (epsilon + speech_frames) * 10**round_digits
-            ) / (10**round_digits)
+        res["DER_FA"] += diff_qty[torch.where(diff_qty > 0)].sum()
+        res["DER_miss"] += -diff_qty[torch.where(diff_qty < 0)].sum()
         # conf. error not calculated as computing all permutations is expensive
         # TODO use Hungarian algorithm?
 
-        res["VAD_FA"] += round(
-            100.0 *
-            torch.where(
-                ref_spk_qty[torch.where(pred_spk_qty > 0)[0]] < 1)[0].shape[0] /
-            (epsilon + active_frames.shape[0]), 2)
-        res["VAD_miss"] += round(
-            100.0 *
-            torch.where(
-                pred_spk_qty[torch.where(ref_spk_qty > 0)[0]] < 1)[0].shape[0] /
-            (epsilon + active_frames.shape[0]), 2)
+        res["VAD_FA"] += torch.where(ref_spk_qty[torch.where(pred_spk_qty > 0)[0]] < 1)[0].shape[0]
+        res["VAD_miss"] += torch.where(pred_spk_qty[torch.where(ref_spk_qty > 0)[0]] < 1)[0].shape[0]
 
-        res["OSD_FA"] += round(
-            100.0 *
-            torch.where(
-                ref_spk_qty[torch.where(pred_spk_qty > 1)[0]] < 2)[0].shape[0] /
-            (epsilon + overlap_frames.shape[0]), 2)
-        res["OSD_miss"] += round(
-            100.0 *
-            torch.where(
-                pred_spk_qty[torch.where(ref_spk_qty > 1)[0]] < 2)[0].shape[0] /
-            (epsilon + overlap_frames.shape[0]), 2)
+        res["OSD_FA"] += torch.where(ref_spk_qty[torch.where(pred_spk_qty > 1)[0]] < 2)[0].shape[0]
+        res["OSD_miss"] += torch.where(pred_spk_qty[torch.where(ref_spk_qty > 1)[0]] < 2)[0].shape[0]
 
-    # Average across all sequences in batch
-    for k, v in res.items():
-        res[k] = v / target.shape[0]
+    # divide by the numerators estimated in the whole batch
+    res["DER_FA"] = torch.round(100 * res["DER_FA"] / (epsilon + speech_frames_tot) * 10**round_digits / (10**round_digits))
+    res["DER_miss"] = torch.round(100 * res["DER_miss"] / (epsilon + speech_frames_tot) * 10**round_digits / (10**round_digits))
+    res["VAD_FA"] = round(100 * res["VAD_FA"] / (epsilon + active_frames_tot), 2)
+    res["VAD_miss"] = round(100 * res["VAD_miss"] / (epsilon + active_frames_tot), 2)
+    res["OSD_FA"] = round(100 * res["OSD_FA"] / (epsilon + overlap_frames_tot), 2)
+    res["OSD_miss"] = round(100 * res["OSD_miss"] / (epsilon + overlap_frames_tot), 2)
+    res["avg_ref_spk_qty"] = res["avg_ref_spk_qty"] / target.shape[0]
+    res["avg_pred_spk_qty"] = res["avg_pred_spk_qty"] / target.shape[0]
+
     return res
 
 
