@@ -23,11 +23,13 @@ Note that in the example you need to define the data, model and output directori
 In case of using the software please cite:\
 Federico Landini, Alicia Lozano-Diez, Mireia Diez, Lukáš Burget: [From Simulated Mixtures to Simulated Conversations as Training Data for End-to-End Neural Diarization](https://arxiv.org/abs/2204.00890)
 ```
-@article{landini2022simulated,
-  title={From Simulated Mixtures to Simulated Conversations as Training Data for End-to-End Neural Diarization},
-  author={Landini, Federico and Lozano-Diez, Alicia and Diez, Mireia and Burget, Luk{\'a}{\v{s}}},
-  journal={arXiv preprint arXiv:2204.00890},
-  year={2022}
+@inproceedings{landini22_interspeech,
+  author={Federico Landini and Alicia Lozano-Diez and Mireia Diez and Lukáš Burget},
+  title={{From Simulated Mixtures to Simulated Conversations as Training Data for End-to-End Neural Diarization}},
+  year=2022,
+  booktitle={Proc. Interspeech 2022},
+  pages={5095--5099},
+  doi={10.21437/Interspeech.2022-10451}
 }
 ```
 
