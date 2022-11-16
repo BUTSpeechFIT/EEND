@@ -75,13 +75,3 @@ def vad_loss(ys: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
     loss = torch.mean(loss)
     return loss
 
-
-def standard_loss(ys: torch.Tensor, ts: torch.Tensor) -> torch.Tensor:
-    loss = F.binary_cross_entropy_with_logits(ys, ts, reduction='none')
-    # zero parts of sequences that correspond to padding
-    loss[torch.where(ts == -1)] = 0
-    # normalize by sequence length
-    loss = torch.sum(loss, axis=1) / (ts != -1).sum(axis=1)
-    # normalize in batch for all speakers
-    loss = torch.mean(loss)
-    return loss

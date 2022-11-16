@@ -7,7 +7,6 @@
 from os.path import isfile, join
 
 from backend.losses import (
-    standard_loss,
     pit_loss_multispk,
     vad_loss,
 )
