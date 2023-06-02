@@ -130,6 +130,9 @@ def postprocess_output(
     median_window_length: int
 ) -> np.ndarray:
     thresholded = probabilities > threshold
+    # Use this instead if it fails with newer medfilt version
+    # (see https://github.com/scipy/scipy/issues/16648)
+    # thresholded = 1.0 * (probabilities > threshold)
     filtered = np.zeros(thresholded.shape)
     for spk in range(filtered.shape[1]):
         filtered[:, spk] = medfilt(
