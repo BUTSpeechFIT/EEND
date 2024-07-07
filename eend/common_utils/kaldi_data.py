@@ -42,7 +42,7 @@ def load_segments_rechash(segments_file: str) -> Dict[str, Dict[str, Any]]:
 def load_wav_scp(wav_scp_file: str) -> Dict[str, str]:
     """ return dictionary { rec: wav_rxfilename } """
     lines = [line.strip().split(None, 1) for line in open(wav_scp_file)]
-    return {x[0]: x[1] for x in lines}
+    return {x[0]: x[1] for x in lines if len(x) == 2}
 
 
 @lru_cache(maxsize=1)
