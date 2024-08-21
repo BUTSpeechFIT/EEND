@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from typing import Tuple
 import logging
-
+import soundfile as sf
 
 def _count_frames(data_len: int, size: int, step: int) -> int:
     # no padding at edges, last remaining samples are ignored
@@ -67,8 +67,10 @@ class KaldiDiarizationDataset(torch.utils.data.Dataset):
 
         # make chunk indices: filepath, start_frame, end_frame
         for rec in self.data.wavs:
+            with sf.SoundFile(self.data.wavs[rec]) as audio_file:
+                duration = len(audio_file) / audio_file.samplerate
             data_len = int(
-                self.data.reco2dur[rec] * sampling_rate / frame_shift)
+                duration * sampling_rate / frame_shift)
             data_len = int(data_len / self.subsampling)
             if chunk_size > 0:
                 for st, ed in _gen_frame_indices(
