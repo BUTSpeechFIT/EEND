@@ -184,7 +184,7 @@ def parse_arguments() -> SimpleNamespace:
     parser.add_argument('--subsampling', default=10, type=int)
     parser.add_argument('--train-batchsize', default=1, type=int,
                         help='number of utterances in one train batch')
-    parser.add_argument('--train-data-dir',
+    parser.add_argument('--train-data-dir', type = str,
                         help='kaldi-style data dir used for training.')
     parser.add_argument('--transformer-encoder-dropout', type=float)
     parser.add_argument('--transformer-encoder-n-heads', type=int)
