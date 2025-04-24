@@ -329,4 +329,6 @@ if __name__ == '__main__':
             writer.add_scalar(
                 f"dev_{k}", acum_dev_metrics[k] / dev_batches_qty,
                 epoch * dev_batches_qty + i)
+        
+        acum_train_metrics = reset_metrics(acum_train_metrics)
         acum_dev_metrics = reset_metrics(acum_dev_metrics)
